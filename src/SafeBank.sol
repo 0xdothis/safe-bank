@@ -18,6 +18,11 @@ contract SafeBank {
     /// @notice mapping to keep track of user balance
     mapping(address => uint256) private balances;
 
+    /// @notice reentrancy gaurds
+    uint256 private constant _NOT_ENTERED = 1;
+    uint256 private constant _ENTERED = 2;
+    uint256 private _status = _NOT_ENTERED;
+
     /// @notice a private variable to track when a function is active
     bool private locked;
 
@@ -49,15 +54,12 @@ contract SafeBank {
     /// @notice A re-entrant modifier
     /// @dev make sure the contract is locked during a single transaction
     modifier nonReentrant() {
-        if (locked) {
-            revert Reentrant();
-        }
-
-        locked = true;
+        if (_status == _ENTERED) revert Reentrant();
+        _status = _ENTERED;
 
         _;
 
-        locked = false;
+        _status = _NOT_ENTERED;
     }
 
     /// @notice WithdrawTo function that allows users to withdraw from the balance to another account
@@ -78,5 +80,9 @@ contract SafeBank {
         }
 
         emit Withdraw(to, amount);
+    }
+
+    function balanceOf(address acount) external view returns (uint256) {
+        return balances[acount];
     }
 }
