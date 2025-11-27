@@ -108,4 +108,36 @@ contract SafeBankTest is Test {
         assertEq(address(attackerContract).balance, 1 ether);
         assertEq(attackBalance, 0 ether);
     }
+
+    function test_user_can_request_withdraw() external {
+        deal(bob, 10 ether);
+
+        vm.startPrank(bob);
+        safeBank.deposit{value: 3 ether}();
+
+        safeBank.requestWithdraw(2 ether);
+        vm.stopPrank();
+
+        uint256 bobPending = safeBank.pendingOf(bob);
+
+        assertEq(bobPending, 2 ether);
+        assertEq(safeBank.balanceOf(bob), 1 ether);
+    }
+
+    function test_user_can_request_claim() external {
+        deal(bob, 10 ether);
+
+        vm.startPrank(bob);
+        safeBank.deposit{value: 3 ether}();
+        uint256 initialBalance = safeBank.balanceOf(bob);
+
+        safeBank.requestWithdraw(2 ether);
+
+        safeBank.claimWithdrawal();
+        uint256 bobPending = safeBank.pendingOf(bob);
+        vm.stopPrank();
+
+        assertEq(bobPending, 0 ether);
+        assertLt(initialBalance, address(bob).balance);
+    }
 }
