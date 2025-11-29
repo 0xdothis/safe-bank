@@ -10,6 +10,7 @@ contract SafeBank {
     error Reentrant();
     /// @notice A custom error when requestst pending is zero
     error NoPendingRequest();
+    error LengthDoNotMatch();
 
     /// @notice A Deposit event thaats emitted when a user deposit
     event Deposit(address indexed from, uint256 amount);
@@ -20,6 +21,10 @@ contract SafeBank {
     /// @notice A WithdrawRequest event that's emitted when a user request to withdraw
     event WithdrawRequested(address account, uint256 amount);
 
+    event WithdrawFailed(address indexed to, uint256 amount, string reason);
+
+    event WithdrawIndexed(address indexed to, bytes32 indexed reasonHash, uint256 amount);
+
     /// @notice mapping to keep track of user balance
     mapping(address => uint256) private balances;
 
@@ -27,9 +32,9 @@ contract SafeBank {
     mapping(address => uint256) private pendingWithdrawals;
 
     /// @notice reentrancy gaurds
-    uint256 private constant _NOT_ENTERED = 1;
-    uint256 private constant _ENTERED = 2;
-    uint256 private _status = _NOT_ENTERED;
+    uint256 private _status = 1;
+
+    uint256 private startIndex;
 
     /// @notice Deposit function that allows user to deposit ether
     /// @dev payable function allows countract to handle ether
@@ -75,6 +80,7 @@ contract SafeBank {
     ///
     function claimWithdrawal() external nonReentrant {
         uint256 bal = pendingWithdrawals[msg.sender];
+        bytes32 reason = keccak256(bytes("pull"));
         if (bal == 0) revert NoPendingRequest();
 
         pendingWithdrawals[msg.sender] = 0;
@@ -85,17 +91,18 @@ contract SafeBank {
         }
 
         emit Withdraw(msg.sender, bal);
+        emit WithdrawIndexed(msg.sender, reason, bal);
     }
 
     /// @notice A re-entrant modifier
     /// @dev make sure the contract is locked during a single transaction
     modifier nonReentrant() {
-        if (_status == _ENTERED) revert Reentrant();
-        _status = _ENTERED;
+        if (_status == 2) revert Reentrant();
+        _status = 2;
 
         _;
 
-        _status = _NOT_ENTERED;
+        _status = 1;
     }
 
     /// @notice WithdrawTo function that allows users to withdraw from the balance to another account
@@ -132,5 +139,47 @@ contract SafeBank {
     /// @param account The address to check
     function pendingOf(address account) external view returns (uint256) {
         return pendingWithdrawals[account];
+    }
+
+    function batchDisburse(address[] calldata recipients, uint256[] calldata amounts, uint256 maxIterations)
+        external
+        nonReentrant
+    {
+        bytes32 reason = keccak256(bytes("batch"));
+
+        if (recipients.length != amounts.length || recipients.length == 0) {
+            revert LengthDoNotMatch();
+        }
+
+        uint256 iterations = recipients.length < maxIterations ? recipients.length : maxIterations;
+
+        for (uint256 i; i < iterations; i++) {
+            if (gasleft() < 50_000) {
+                break;
+            }
+
+            address to = recipients[i];
+            uint256 amount = amounts[i];
+
+            uint256 pending = pendingWithdrawals[to];
+
+            if (pending < amount) {
+                emit WithdrawFailed(to, amount, "insufficient");
+                continue;
+            }
+
+            pendingWithdrawals[to] = pending - amount;
+
+            (bool ok,) = payable(to).call{value: amount}("");
+
+            if (ok) {
+                emit Withdraw(to, amount);
+                emit WithdrawIndexed(to, reason, amount);
+            } else {
+                pendingWithdrawals[to] = pending;
+                emit WithdrawFailed(recipients[i], amounts[i], "transfer_failed");
+                emit WithdrawIndexed(to, keccak256(bytes("failed")), amounts[i]);
+            }
+        }
     }
 }
